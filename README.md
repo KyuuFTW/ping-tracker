@@ -113,26 +113,18 @@ The app has three layers:
 
 ### Building release binaries
 
-To produce the binaries that get uploaded to GitHub Releases:
+To build the Windows `.exe` for release:
 
 ```sh
-# Linux (amd64)
-GOOS=linux GOARCH=amd64 go build -o ping-tracker .
-
-# Linux (arm64, e.g. Raspberry Pi)
-GOOS=linux GOARCH=arm64 go build -o ping-tracker-arm64 .
-
-# Windows (amd64)
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o ping-tracker.exe .
+./build_for_release.sh
 ```
 
-`CGO_ENABLED=0` is set for Windows to ensure a fully static binary with no C toolchain required on the build host.
+This produces `ping-tracker.exe` in the project root.
 
 Then create a GitHub release and attach the binaries:
 
 ```sh
 gh release create v0.1.0 \
-  ping-tracker \
   ping-tracker.exe \
   --title "v0.1.0" \
   --notes "Initial release"
