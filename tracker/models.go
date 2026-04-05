@@ -31,6 +31,13 @@ const (
 	Outbound Direction = "OUT"
 )
 
+// PingSample records a single ping measurement at a point in time.
+type PingSample struct {
+	Time time.Time
+	RTT  time.Duration
+	Loss float64
+}
+
 // Connection represents a single tracked network connection.
 type Connection struct {
 	// Identity
@@ -57,6 +64,9 @@ type Connection struct {
 	RxRate  float64       // bytes/sec receive rate
 	ConnAge time.Duration // how long the connection has existed
 
+	// Ping history (last 5 minutes)
+	PingHistory []PingSample
+
 	// Internal bookkeeping
 	FirstSeen   time.Time
 	LastUpdated time.Time
@@ -67,6 +77,22 @@ type Connection struct {
 	prevTxBytes uint64
 	prevRxBytes uint64
 	prevTime    time.Time
+}
+
+const pingHistoryWindow = 5 * time.Minute
+
+// RecordPing adds a ping sample and trims samples older than 5 minutes.
+func (c *Connection) RecordPing(rtt time.Duration, loss float64) {
+	now := time.Now()
+	c.PingHistory = append(c.PingHistory, PingSample{Time: now, RTT: rtt, Loss: loss})
+	cutoff := now.Add(-pingHistoryWindow)
+	i := 0
+	for i < len(c.PingHistory) && c.PingHistory[i].Time.Before(cutoff) {
+		i++
+	}
+	if i > 0 {
+		c.PingHistory = c.PingHistory[i:]
+	}
 }
 
 // Key returns a unique identifier for this connection.

@@ -147,6 +147,7 @@ func (t *Tracker) pingAll() {
 			if loss >= 100 {
 				conn.PingFailed++
 			}
+			conn.RecordPing(rtt, loss)
 			t.mu.Unlock()
 		}(c)
 	}
@@ -162,6 +163,11 @@ func (t *Tracker) Snapshot() []*Connection {
 	result := make([]*Connection, 0, len(t.connections))
 	for _, c := range t.connections {
 		cp := *c // shallow copy
+		// Deep copy ping history slice
+		if len(c.PingHistory) > 0 {
+			cp.PingHistory = make([]PingSample, len(c.PingHistory))
+			copy(cp.PingHistory, c.PingHistory)
+		}
 		result = append(result, &cp)
 	}
 	return result
@@ -181,6 +187,10 @@ func (t *Tracker) Search(query string) []*Connection {
 	for _, c := range t.connections {
 		if strings.Contains(strings.ToLower(c.AppName), query) {
 			cp := *c
+			if len(c.PingHistory) > 0 {
+				cp.PingHistory = make([]PingSample, len(c.PingHistory))
+				copy(cp.PingHistory, c.PingHistory)
+			}
 			result = append(result, &cp)
 		}
 	}

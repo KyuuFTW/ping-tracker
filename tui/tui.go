@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -45,6 +46,18 @@ var (
 
 	dirIn  = lipgloss.NewStyle().Foreground(lipgloss.Color("87"))
 	dirOut = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+
+	detailTitleStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("170")).
+				PaddingLeft(1)
+
+	detailLabelStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("39"))
+
+	graphBorderStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("241"))
 )
 
 type tickMsg time.Time
@@ -75,6 +88,7 @@ type Model struct {
 	sortAsc     bool
 	paused      bool
 	showHelp    bool
+	detailView  bool // show detail graph for selected connection
 }
 
 // NewModel creates a new TUI model.
@@ -137,12 +151,22 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSearchKey(msg)
 	}
 
+	if m.detailView {
+		return m.handleDetailKey(msg)
+	}
+
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 
 	case "/":
 		m.searching = true
+		return m, nil
+
+	case "enter":
+		if m.cursor >= 0 && m.cursor < len(m.connections) {
+			m.detailView = true
+		}
 		return m, nil
 
 	case "up", "k":
@@ -230,6 +254,16 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "esc", "enter", "backspace":
+		m.detailView = false
+	}
+	return m, nil
+}
+
 func (m *Model) toggleSort(field SortField) {
 	if m.sortField == field {
 		m.sortAsc = !m.sortAsc
@@ -304,6 +338,10 @@ func (m Model) visibleRows() int {
 func (m Model) View() string {
 	if m.showHelp {
 		return m.renderHelp()
+	}
+
+	if m.detailView && m.cursor >= 0 && m.cursor < len(m.connections) {
+		return m.renderDetail(m.connections[m.cursor])
 	}
 
 	var b strings.Builder
@@ -470,6 +508,219 @@ func styledPadRight(text string, style lipgloss.Style, width int) string {
 	return styled
 }
 
+func (m Model) renderDetail(c *tracker.Connection) string {
+	var b strings.Builder
+
+	// Title
+	title := detailTitleStyle.Render(fmt.Sprintf("  %s (PID %d) - %s:%d → %s:%d",
+		c.AppName, c.PID, c.LocalAddr, c.LocalPort, c.RemoteAddr, c.RemotePort))
+	b.WriteString(title + "\n\n")
+
+	// Current stats
+	pingStr := "-"
+	if c.Ping > 0 {
+		pingStr = fmt.Sprintf("%.1fms", float64(c.Ping.Microseconds())/1000.0)
+	}
+	lossStr := "-"
+	if c.PingCount > 0 {
+		lossStr = fmt.Sprintf("%.1f%%", c.Loss)
+	}
+	b.WriteString(fmt.Sprintf("  %s %s   %s %s   %s %s   %s %s\n\n",
+		detailLabelStyle.Render("Ping:"), pingStr,
+		detailLabelStyle.Render("Loss:"), lossStr,
+		detailLabelStyle.Render("State:"), string(c.State),
+		detailLabelStyle.Render("Age:"), c.ConnAge.Truncate(time.Second).String()))
+
+	graphWidth := maxInt(20, m.width-6)
+	graphHeight := maxInt(5, (m.height-12)/2)
+
+	// Ping latency graph
+	b.WriteString(detailLabelStyle.Render("  Ping Latency (last 5 min)") + "\n")
+	b.WriteString(m.renderGraph(c.PingHistory, graphWidth, graphHeight, false))
+	b.WriteString("\n")
+
+	// Loss graph
+	b.WriteString(detailLabelStyle.Render("  Packet Loss % (last 5 min)") + "\n")
+	b.WriteString(m.renderGraph(c.PingHistory, graphWidth, graphHeight, true))
+
+	// Status bar
+	b.WriteString("\n")
+	status := statusBarStyle.Render(fmt.Sprintf(" %d samples | Esc:back  q:quit",
+		len(c.PingHistory)))
+	b.WriteString(status)
+
+	return b.String()
+}
+
+// renderGraph draws an ASCII sparkline-style graph.
+// If showLoss is true, graphs the Loss% (0-100), otherwise graphs RTT in ms.
+func (m Model) renderGraph(history []tracker.PingSample, width, height int, showLoss bool) string {
+	if len(history) == 0 {
+		return "  (no data yet)\n"
+	}
+
+	// Bucket samples into `width` time slots over the last 5 minutes
+	now := time.Now()
+	windowStart := now.Add(-5 * time.Minute)
+	bucketDur := (5 * time.Minute) / time.Duration(width)
+
+	values := make([]float64, width)
+	counts := make([]int, width)
+
+	for _, s := range history {
+		if s.Time.Before(windowStart) {
+			continue
+		}
+		idx := int(s.Time.Sub(windowStart) / bucketDur)
+		if idx >= width {
+			idx = width - 1
+		}
+		if showLoss {
+			values[idx] += s.Loss
+		} else {
+			values[idx] += float64(s.RTT.Microseconds()) / 1000.0
+		}
+		counts[idx]++
+	}
+
+	// Compute averages
+	for i := range values {
+		if counts[i] > 0 {
+			values[i] /= float64(counts[i])
+		} else {
+			values[i] = -1 // no data
+		}
+	}
+
+	// Find min/max for scaling
+	minVal := math.MaxFloat64
+	maxVal := 0.0
+	hasData := false
+	for _, v := range values {
+		if v < 0 {
+			continue
+		}
+		hasData = true
+		if v < minVal {
+			minVal = v
+		}
+		if v > maxVal {
+			maxVal = v
+		}
+	}
+
+	if !hasData {
+		return "  (no data yet)\n"
+	}
+
+	if showLoss {
+		// Fixed 0-100 scale for loss
+		minVal = 0
+		if maxVal < 1 {
+			maxVal = 1
+		}
+	} else {
+		// Ping: set floor to 0
+		minVal = 0
+		if maxVal < 1 {
+			maxVal = 1
+		}
+	}
+
+	brailleBlocks := []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+
+	var b strings.Builder
+
+	// Y-axis label + graph
+	maxLabel := ""
+	minLabel := ""
+	if showLoss {
+		maxLabel = fmt.Sprintf("%5.0f%%", maxVal)
+		minLabel = fmt.Sprintf("%5.0f%%", minVal)
+	} else {
+		maxLabel = fmt.Sprintf("%5.0fms", maxVal)
+		minLabel = fmt.Sprintf("%5.0fms", minVal)
+	}
+
+	_ = height // We use a single-row sparkline for compactness
+
+	b.WriteString(graphBorderStyle.Render(fmt.Sprintf("  %s ┤", maxLabel)))
+
+	for _, v := range values {
+		if v < 0 {
+			b.WriteRune(' ')
+			continue
+		}
+		ratio := (v - minVal) / (maxVal - minVal)
+		if ratio < 0 {
+			ratio = 0
+		}
+		if ratio > 1 {
+			ratio = 1
+		}
+		idx := int(ratio * float64(len(brailleBlocks)-1))
+		// Color based on value
+		ch := string(brailleBlocks[idx])
+		if showLoss {
+			switch {
+			case v < 1:
+				b.WriteString(goodPing.Render(ch))
+			case v < 10:
+				b.WriteString(okPing.Render(ch))
+			default:
+				b.WriteString(badPing.Render(ch))
+			}
+		} else {
+			switch {
+			case v < 50:
+				b.WriteString(goodPing.Render(ch))
+			case v < 150:
+				b.WriteString(okPing.Render(ch))
+			default:
+				b.WriteString(badPing.Render(ch))
+			}
+		}
+	}
+
+	b.WriteString("\n")
+	b.WriteString(graphBorderStyle.Render(fmt.Sprintf("  %s ┤", minLabel)))
+	b.WriteString(graphBorderStyle.Render(strings.Repeat("─", width)))
+	b.WriteString("\n")
+
+	// Time axis labels
+	b.WriteString("        ")
+	b.WriteString(graphBorderStyle.Render(fmt.Sprintf("%-*s", width, "5m ago")))
+	b.WriteString("\n")
+
+	// Stats summary
+	var sum float64
+	var max float64
+	var min float64 = math.MaxFloat64
+	var cnt int
+	for _, v := range values {
+		if v < 0 {
+			continue
+		}
+		sum += v
+		cnt++
+		if v > max {
+			max = v
+		}
+		if v < min {
+			min = v
+		}
+	}
+	avg := sum / float64(cnt)
+
+	if showLoss {
+		b.WriteString(fmt.Sprintf("  avg: %.1f%%  min: %.1f%%  max: %.1f%%\n", avg, min, max))
+	} else {
+		b.WriteString(fmt.Sprintf("  avg: %.1fms  min: %.1fms  max: %.1fms\n", avg, min, max))
+	}
+
+	return b.String()
+}
+
 func (m Model) renderHelp() string {
 	help := `
   Ping Tracker - Help
@@ -478,6 +729,7 @@ func (m Model) renderHelp() string {
   Navigation:
     j/k or Up/Down   Move cursor
     g / G             Jump to top / bottom
+    Enter             View ping history graph
 
   Search:
     /                 Start search (filters by app name)
