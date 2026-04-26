@@ -6,8 +6,8 @@ import (
 )
 
 const (
-	pingTimeout = 2 * time.Second
-	pingCount   = 3
+	pingTimeout = 750 * time.Millisecond
+	pingCount   = 2
 )
 
 // MeasurePing measures TCP-based latency to a remote address by attempting

@@ -1,4 +1,38 @@
-# Binaries
-ping-tracker
-ping-tracker.exe
-*.exe
+# Build outputs
+/ping-tracker
+/ping-tracker.exe
+/build/bin/
+/dist/release/
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/dist/
+
+# Wails/dev runtime artifacts
+frontend/wailsjs/runtime/
+
+# Local environment and editor files
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs and caches
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.cache/
+.tmp/
+tmp/

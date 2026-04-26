@@ -1,0 +1,18 @@
+{
+  "name": "ping-tracker-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@tsconfig/svelte": "^5.0.4",
+    "svelte": "^5.19.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0"
+  }
+}

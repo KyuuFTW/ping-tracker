@@ -1,16 +1,19 @@
 package main
 
 import (
+	"embed"
 	"flag"
 	"fmt"
 	"os"
 	"time"
 
-	"ping-tracker/tracker"
-	"ping-tracker/tui"
-
-	tea "github.com/charmbracelet/bubbletea"
+	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/options"
+	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 )
+
+//go:embed all:frontend/dist
+var assets embed.FS
 
 func main() {
 	interval := flag.Duration("interval", 3*time.Second, "scan interval")
@@ -18,19 +21,24 @@ func main() {
 	filter := flag.String("filter", "", "initial app name filter (substring match)")
 	flag.Parse()
 
-	checkPrivileges()
+	app := NewApp(*interval, !*noPing, *filter)
 
-	t := tracker.NewTracker(*interval, !*noPing)
-	t.Start()
-	defer t.Stop()
-
-	model := tui.NewModel(t)
-	if *filter != "" {
-		model.SetFilter(*filter)
-	}
-
-	p := tea.NewProgram(model, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+	err := wails.Run(&options.App{
+		Title:     "Ping Tracker",
+		Width:     1280,
+		Height:    820,
+		MinWidth:  960,
+		MinHeight: 640,
+		AssetServer: &assetserver.Options{
+			Assets: assets,
+		},
+		OnStartup:  app.startup,
+		OnShutdown: app.shutdown,
+		Bind: []interface{}{
+			app,
+		},
+	})
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}

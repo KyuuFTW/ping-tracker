@@ -11,8 +11,13 @@ type Tracker struct {
 	mu          sync.RWMutex
 	connections map[string]*Connection
 	stopCh      chan struct{}
+	stopOnce    sync.Once
 	interval    time.Duration
 	pingEnabled bool
+	ready       bool
+	scanning    bool
+	lastScan    time.Time
+	lastError   string
 }
 
 // NewTracker creates a new Tracker with the given scan interval.
@@ -27,10 +32,9 @@ func NewTracker(interval time.Duration, pingEnabled bool) *Tracker {
 
 // Start begins periodic scanning in the background.
 func (t *Tracker) Start() {
-	// Initial scan
-	t.scan()
-
 	go func() {
+		t.scan()
+
 		ticker := time.NewTicker(t.interval)
 		defer ticker.Stop()
 		for {
@@ -46,13 +50,19 @@ func (t *Tracker) Start() {
 
 // Stop halts the tracker.
 func (t *Tracker) Stop() {
-	close(t.stopCh)
+	t.stopOnce.Do(func() {
+		close(t.stopCh)
+	})
 }
 
 // scan performs a single scan cycle: discover connections, update metrics.
 func (t *Tracker) scan() {
+	t.setScanning(true)
+	defer t.setScanning(false)
+
 	scanned, err := ScanConnections()
 	if err != nil {
+		t.setScanStatus(false, err.Error())
 		return
 	}
 
@@ -109,11 +119,33 @@ func (t *Tracker) scan() {
 	}
 
 	t.mu.Unlock()
+	t.setScanStatus(true, "")
 
 	// Ping in parallel (outside lock)
 	if t.pingEnabled {
 		t.pingAll()
 	}
+}
+
+func (t *Tracker) setScanning(scanning bool) {
+	t.mu.Lock()
+	t.scanning = scanning
+	t.mu.Unlock()
+}
+
+func (t *Tracker) setScanStatus(ready bool, err string) {
+	t.mu.Lock()
+	t.ready = ready
+	t.lastScan = time.Now()
+	t.lastError = err
+	t.mu.Unlock()
+}
+
+// Status returns tracker lifecycle information for the UI.
+func (t *Tracker) Status() (ready bool, scanning bool, lastScan time.Time, lastError string) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.ready, t.scanning, t.lastScan, t.lastError
 }
 
 // pingAll measures latency for all active ESTABLISHED connections.
@@ -127,8 +159,8 @@ func (t *Tracker) pingAll() {
 	}
 	t.mu.RUnlock()
 
-	// Limit concurrency to avoid flooding
-	sem := make(chan struct{}, 20)
+	// Limit concurrency to avoid flooding and avoid long UI refresh gaps.
+	sem := make(chan struct{}, 32)
 	var wg sync.WaitGroup
 
 	for _, c := range targets {
