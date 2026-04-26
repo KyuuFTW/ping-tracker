@@ -7,6 +7,8 @@
   let connections: Connection[] = []
   let history: PingSample[] = []
   let selectedKey = ''
+  let selected: Connection | null = null
+  let selectionVersion = 0
   let filter = ''
   let sortField: SortField = 'app'
   let sortAsc = true
@@ -17,8 +19,6 @@
   let ready = false
   let lastUpdated = ''
   let error = ''
-
-  $: selected = connections.find((connection) => connection.key === selectedKey) ?? null
 
   onMount(() => {
     let disposed = false
@@ -71,11 +71,20 @@
 
       if (!selectedKey && next.length > 0) {
         selectedKey = next[0].key
+        selected = next[0]
       }
       if (selectedKey && !next.some((connection) => connection.key === selectedKey)) {
         selectedKey = next[0]?.key ?? ''
+        selected = next[0] ?? null
+      } else if (selectedKey) {
+        selected = next.find((connection) => connection.key === selectedKey) ?? selected
       }
-      history = selectedKey ? await getHistory(selectedKey) : []
+      const refreshSelection = selectedKey
+      const refreshVersion = selectionVersion
+      const nextHistory = refreshSelection ? await getHistory(refreshSelection) : []
+      if (refreshSelection === selectedKey && refreshVersion === selectionVersion) {
+        history = nextHistory
+      }
       lastUpdated = new Date().toLocaleTimeString()
       error = status.lastError
     } catch (err) {
@@ -83,9 +92,17 @@
     }
   }
 
-  async function selectConnection(key: string) {
-    selectedKey = key
-    history = await getHistory(key)
+  async function selectConnection(connection: Connection) {
+    const version = selectionVersion + 1
+    selectionVersion = version
+    selectedKey = connection.key
+    selected = connection
+    history = []
+
+    const nextHistory = await getHistory(connection.key)
+    if (selectionVersion === version && selectedKey === connection.key) {
+      history = nextHistory
+    }
   }
 
   function setSort(field: SortField) {
@@ -196,7 +213,7 @@
               <tr><td colspan="11" class="empty">No active connections found.</td></tr>
             {:else}
               {#each connections as connection (connection.key)}
-                <tr class:selected={connection.key === selectedKey} onclick={() => selectConnection(connection.key)}>
+                <tr class:selected={connection.key === selectedKey} onclick={() => selectConnection(connection)}>
                   <td>{connection.pid}</td>
                   <td class="app-name">{connection.appName}</td>
                   <td class={pingClass(connection.pingMs)}>{fmtPing(connection.pingMs)}</td>
@@ -251,8 +268,8 @@
           <span>{selected.remote}</span>
         </div>
 
-        <Graph title="Ping latency" samples={history} mode="rtt" />
-        <Graph title="Packet loss" samples={history} mode="loss" />
+        <Graph title="Ping latency" samples={history} mode="rtt" scaleKey={selected.key} />
+        <Graph title="Packet loss" samples={history} mode="loss" scaleKey={selected.key} />
       {:else}
         <div class="empty-detail">Select a connection to show ping history.</div>
       {/if}

@@ -1,22 +1,51 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import type { PingSample } from '../lib/types'
 
   export let title: string
   export let samples: PingSample[] = []
   export let mode: 'rtt' | 'loss'
+  export let scaleKey = ''
 
   let canvas: HTMLCanvasElement
+  let summary = ''
+  let lastDrawKey = ''
+  let lastScaleKey = ''
+  let rttMaxScale = 100
+  let pendingFrame = 0
 
   onMount(() => {
-    const resize = () => drawGraph()
+    const resize = () => scheduleDraw(drawKey(samples, mode, scaleKey), true)
     window.addEventListener('resize', resize)
-    drawGraph()
+    scheduleDraw(drawKey(samples, mode, scaleKey), true)
     return () => window.removeEventListener('resize', resize)
   })
 
-  $: if (canvas) {
-    drawGraph()
+  $: if (scaleKey !== lastScaleKey) {
+    lastScaleKey = scaleKey
+    rttMaxScale = 100
+    lastDrawKey = ''
+  }
+
+  $: if (canvas && drawKey(samples, mode, scaleKey) !== lastDrawKey) {
+    scheduleDraw(drawKey(samples, mode, scaleKey))
+  }
+
+  async function scheduleDraw(key: string, force = false) {
+    if (!canvas) return
+    if (!force && key === lastDrawKey) return
+
+    lastDrawKey = key
+    await tick()
+
+    if (pendingFrame) {
+      cancelAnimationFrame(pendingFrame)
+    }
+
+    pendingFrame = requestAnimationFrame(() => {
+      pendingFrame = 0
+      drawGraph()
+    })
   }
 
   function drawGraph() {
@@ -50,10 +79,11 @@
     }
 
     const now = Date.now()
-    const start = now - 5 * 60 * 1000
-    const visible = samples.filter((sample) => sample.time >= start)
+    const windowStart = now - 5 * 60 * 1000
+    const visible = samples.filter((sample) => sample.time >= windowStart)
 
     if (visible.length === 0) {
+      summary = 'No samples'
       ctx.fillStyle = text
       ctx.font = '12px system-ui, sans-serif'
       ctx.fillText('No samples yet', 12, height / 2)
@@ -61,12 +91,28 @@
     }
 
     const values = visible.map((sample) => (mode === 'rtt' ? sample.rttMs : sample.loss))
-    const maxValue = mode === 'loss' ? 100 : Math.max(1, ...values) * 1.18
+    const minSampleTime = Math.min(...visible.map((sample) => sample.time))
+    const maxSampleTime = Math.max(...visible.map((sample) => sample.time), now)
+    const start = Math.max(windowStart, minSampleTime)
+    const end = Math.max(start + 1000, maxSampleTime)
+
+    const minRaw = Math.min(...values)
+    const maxRaw = Math.max(...values)
+    const avg = values.reduce((sum, value) => sum + value, 0) / values.length
+    summary = mode === 'loss'
+      ? `avg ${avg.toFixed(1)}% · min ${minRaw.toFixed(1)}% · max ${maxRaw.toFixed(1)}%`
+      : `avg ${avg.toFixed(1)}ms · min ${minRaw.toFixed(1)}ms · max ${maxRaw.toFixed(1)}ms`
+    if (mode === 'rtt' && maxRaw > rttMaxScale) {
+      rttMaxScale = roundScale(maxRaw)
+    }
+
+    const minValue = 0
+    const maxValue = mode === 'loss' ? 100 : rttMaxScale
 
     const points = visible.map((sample) => {
-      const x = ((sample.time - start) / (now - start)) * width
+      const x = ((sample.time - start) / (end - start)) * width
       const value = mode === 'rtt' ? sample.rttMs : sample.loss
-      const y = height - Math.min(1, Math.max(0, value / maxValue)) * (height - 18) - 8
+      const y = height - Math.min(1, Math.max(0, (value - minValue) / (maxValue - minValue))) * (height - 18) - 8
       return [x, y] as const
     })
 
@@ -88,8 +134,27 @@
     ctx.fillStyle = text
     ctx.font = '11px system-ui, sans-serif'
     ctx.fillText(mode === 'loss' ? '100%' : `${maxValue.toFixed(0)}ms`, 8, 14)
-    ctx.fillText('5m ago', 8, height - 8)
+    ctx.fillText(mode === 'loss' ? '0%' : '0ms', 8, height - 22)
+    ctx.fillText(formatAge(now - start), 8, height - 8)
     ctx.fillText('now', width - 28, height - 8)
+  }
+
+  function drawKey(nextSamples: PingSample[], nextMode: 'rtt' | 'loss', nextScaleKey: string) {
+    const last = nextSamples[nextSamples.length - 1]
+    return `${nextScaleKey}:${nextMode}:${nextSamples.length}:${last?.time ?? 0}:${last?.rttMs ?? 0}:${last?.loss ?? 0}`
+  }
+
+  function roundScale(value: number) {
+    const padded = Math.max(100, value * 1.1)
+    if (padded <= 250) return Math.ceil(padded / 25) * 25
+    if (padded <= 1000) return Math.ceil(padded / 100) * 100
+    return Math.ceil(padded / 500) * 500
+  }
+
+  function formatAge(ms: number) {
+    const seconds = Math.max(1, Math.round(ms / 1000))
+    if (seconds < 60) return `${seconds}s ago`
+    return `${Math.round(seconds / 60)}m ago`
   }
 </script>
 
@@ -99,4 +164,5 @@
     <small>{samples.length} samples</small>
   </div>
   <canvas bind:this={canvas}></canvas>
+  <div class="graph-summary">{summary}</div>
 </section>
