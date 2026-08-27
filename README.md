@@ -1,6 +1,6 @@
 # Ping Tracker
 
-A lightweight Windows-focused desktop app that monitors active TCP and UDP connections, measures TCP-connect latency, tracks packet loss, and shows selected connection history as graphs.
+A lightweight Windows-focused desktop app that monitors active TCP and UDP connections, measures true network latency (ICMP Echo ping with TCP fallback), tracks packet loss, and shows selected connection history as graphs.
 
 The app now uses [Wails](https://wails.io/) for a clickable desktop UI with the existing Go tracker running in the background.
 
@@ -201,5 +201,5 @@ ping-tracker/
 | Connection scanning | `/proc/net/tcp{,6}`, `/proc/net/udp{,6}` | `GetExtendedTcpTable` / `GetExtendedUdpTable` |
 | PID resolution | `/proc/<pid>/fd` inode symlinks | `OpenProcess` + `QueryFullProcessImageNameW` |
 | Bandwidth | Socket queue sizes from `/proc/net` | Not available, currently `0 B/s` |
-| Ping measurement | TCP connect probe | TCP connect probe |
+| Ping measurement | ICMP echo (unprivileged socket) + TCP fallback | Win32 `IcmpSendEcho` (`iphlpapi.dll`) + TCP fallback |
 | Privilege needed | root for full PID resolution | Administrator for full process names |
